@@ -84,12 +84,19 @@ def _sample_real_space_basis(bravais: str,
         a = b = np.random.uniform(*a_range)
         gamma = math.radians(60.0)
     elif bravais == "rectangular":
+        while abs(a / b - 1.0) < 0.25:
+            b = np.random.uniform(*b_range)
         gamma = math.radians(90.0)
     elif bravais == "centered-rectangular":
         # conventional rectangular cell, centering handled later via structure factor
+        while abs(a / b - 1.0) < 0.25:
+            b = np.random.uniform(*b_range)
         gamma = math.radians(90.0)
     else:  # oblique
-        gamma = math.radians(np.random.uniform(60.0, 120.0))
+        gamma_deg = np.random.uniform(60.0, 120.0)
+        while abs(gamma_deg - 90.0) < 10.0:
+            gamma_deg = np.random.uniform(60.0, 120.0)
+        gamma = math.radians(gamma_deg)
 
     a1 = np.array([a, 0.0], dtype=np.float32)
     a2 = np.array([b * math.cos(gamma), b * math.sin(gamma)], dtype=np.float32)
@@ -117,6 +124,7 @@ class LEEDGenerator:
                  spot_sigma: float = 1.2,
                  base_amp: float = 1.0,
                  rotation_deg: Optional[float] = None,
+                 random_rotation: bool = True,
                  noise_std_recip: float = 0.02,
                  # FFT method params
                  super_N: int = 32,
@@ -129,6 +137,7 @@ class LEEDGenerator:
         self.spot_sigma = spot_sigma
         self.base_amp = base_amp
         self.rotation_deg = rotation_deg
+        self.random_rotation = random_rotation
         self.noise_std_recip = noise_std_recip
 
         self.super_N = super_N
@@ -153,6 +162,18 @@ class LEEDGenerator:
             return self._generate_fft_image(bravais)
         else:
             raise ValueError("method must be 'reciprocal' or 'fft'.")
+
+    def _rotation_matrix(self) -> Optional[np.ndarray]:
+        if self.rotation_deg is not None:
+            angle = self.rotation_deg
+        elif self.random_rotation:
+            angle = float(np.random.uniform(0.0, 360.0))
+        else:
+            return None
+
+        theta = math.radians(angle)
+        return np.array([[math.cos(theta), -math.sin(theta)],
+                         [math.sin(theta),  math.cos(theta)]], dtype=np.float32)
 
     # -------------- method 1: reciprocal lattice ----------------
 
@@ -182,11 +203,9 @@ class LEEDGenerator:
         s = 0.45 * self.img_size / rmax
         P = s * G
 
-        # Optional rotation (global)
-        if self.rotation_deg is not None:
-            theta = math.radians(self.rotation_deg)
-            R = np.array([[math.cos(theta), -math.sin(theta)],
-                          [math.sin(theta),  math.cos(theta)]], dtype=np.float32)
+        # Random global rotations make the classifier orientation-invariant.
+        R = self._rotation_matrix()
+        if R is not None:
             P = P @ R.T
 
         # Shift to image center
@@ -215,6 +234,10 @@ class LEEDGenerator:
 
     def _generate_fft_image(self, bravais: str) -> np.ndarray:
         a1, a2 = _sample_real_space_basis(bravais)
+        R = self._rotation_matrix()
+        if R is not None:
+            a1 = R @ a1
+            a2 = R @ a2
 
         # Choose basis (structure factor):
         # - centered-rectangular: conventional rectangular cell with 2-atom basis at (0,0) and (1/2,1/2)
@@ -277,10 +300,9 @@ class LEEDGenerator:
         return Ik_small
 
 
-# ------------------------ quick usage demo ------------------------
-import matplotlib.pyplot as plt
-
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+
     gen = LEEDGenerator(img_size=128, HK=8, spot_sigma=1.2, rotation_deg=None)
 
     # Generate one image per class with each method
@@ -292,3 +314,4 @@ if __name__ == "__main__":
         _, ax = plt.subplots(1, 2)
         ax[0].imshow(I_rec, cmap="gray"); ax[0].set_title(f"{cls} (reciprocal)")
         ax[1].imshow(I_fft, cmap="gray"); ax[1].set_title(f"{cls} (FFT)")
+    plt.show()
